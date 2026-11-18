@@ -1,7 +1,8 @@
 """Pipeline composition - orchestrates the full skin scan analysis."""
+
 import numpy as np
 from typing import Dict
-
+import cv2
 from .preprocess import preprocess
 from .face_mesh import FaceMeshDetector, make_region_masks
 from .maps.redness import redness_map
@@ -43,32 +44,74 @@ def run_scan(img: np.ndarray) -> Dict:
     """
     Run complete skin scan pipeline.
 
-    Args:
-        img: Input BGR image
-
     Returns:
-        Dict with keys:
-        - scores: dict[str, float]
-        - overlays: dict[str, str] (base64 PNG)
-        - regions: list[str]
+        scores: Skin analysis scores.
+        overlays: Base64 PNG overlays.
+        regions: Detected facial regions.
+        aligned_bgr: Preprocessed BGR image.
+        cheek_mask: Binary mask containing cheek regions.
     """
-    # Preprocess
+
+    # 1. Preprocess image
     img_processed = preprocess(img, max_size=1024)
 
-    # Detect face landmarks
+    if img_processed is None or img_processed.size == 0:
+        raise ValueError("Image preprocessing failed.")
+
+    # 2. Detect face landmarks
     detector = FaceMeshDetector()
     landmarks = detector.detect(img_processed)
 
     if landmarks is None:
-        raise ValueError("No face detected in image")
+        raise ValueError("No face detected in image.")
 
-    # Create region masks
-    masks = make_region_masks(landmarks, img_processed.shape)
+    # 3. Create facial region masks
+    masks = make_region_masks(
+        landmarks,
+        img_processed.shape,
+    )
 
     if not masks:
-        raise ValueError("Could not create region masks from landmarks")
+        raise ValueError("Could not create region masks from landmarks.")
 
-    # Run all map analyses
+    # 4. Extract cheek masks
+    cheek_mask = np.zeros(
+        img_processed.shape[:2],
+        dtype=np.uint8,
+    )
+
+    # Support common cheek-region naming conventions.
+    cheek_names = {
+        "left_cheek",
+        "right_cheek",
+        "cheek_left",
+        "cheek_right",
+        "left_cheekbone",
+        "right_cheekbone",
+    }
+
+    for name, region_mask in masks.items():
+        if name.lower() in cheek_names:
+            if region_mask is None:
+                continue
+
+            region_mask = np.asarray(region_mask)
+
+            if region_mask.shape[:2] != cheek_mask.shape:
+                raise ValueError(f"Region mask '{name}' has incorrect dimensions.")
+
+            cheek_mask = cv2.bitwise_or(
+                cheek_mask,
+                (region_mask > 0).astype(np.uint8) * 255,
+            )
+
+    if not np.any(cheek_mask):
+        raise ValueError(
+            "No cheek regions found. Check make_region_masks() "
+            "for left_cheek and right_cheek masks."
+        )
+
+    # 5. Run skin analysis maps
     maps = {
         "redness": redness_map(img_processed, masks),
         "oiliness": oiliness_map(img_processed, masks),
@@ -79,23 +122,29 @@ def run_scan(img: np.ndarray) -> Dict:
         "pigment": pigment_map(img_processed, masks),
     }
 
-    # Compute scores
+    # 6. Calculate scores
     scores = {name: score_from_map(map_data, masks) for name, map_data in maps.items()}
 
-    # Generate overlay visualizations
-    overlay_images = generate_all_overlays(maps, alpha=0.6)
+    # 7. Generate heatmap overlays
+    overlay_images = generate_all_overlays(
+        maps,
+        alpha=0.6,
+    )
 
-    # Convert overlays to base64 PNG
     overlays = {
         name: encode_png_base64(overlay_rgba)
         for name, overlay_rgba in overlay_images.items()
     }
 
-    # Get region names
+    # 8. Region names
     regions = list(masks.keys())
 
+    # 9. Return public and internal pipeline outputs
     return {
         "scores": scores,
         "overlays": overlays,
         "regions": regions,
+        # Internal skin-tone processing data
+        "aligned_bgr": img_processed,
+        "cheek_mask": cheek_mask,
     }

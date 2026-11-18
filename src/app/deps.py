@@ -1,4 +1,5 @@
 """Application dependencies: settings, logging, CORS."""
+
 import logging
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +13,10 @@ class Settings(BaseSettings):
     env: str = "dev"
     log_level: str = "INFO"
     max_image_size: int = 2048  # Max image size in KB
+    db_path: str = "openbeautyfacts.duckdb"
+    llm_base_url: str = "http://localhost:11434/v1"
+    llm_api_key: str = "ollama"
+    llm_model: str = "qwen3.5:9b"
 
 
 @lru_cache

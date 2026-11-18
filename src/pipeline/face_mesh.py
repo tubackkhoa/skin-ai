@@ -1,4 +1,5 @@
 """Face mesh detection using MediaPipe and region mask generation."""
+
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -53,92 +54,212 @@ class FaceMeshDetector:
             self.face_mesh.close()
 
 
-def make_region_masks(landmarks: np.ndarray, img_shape: tuple) -> dict[str, np.ndarray]:
+def make_region_masks(
+    landmarks: np.ndarray,
+    img_shape: tuple,
+) -> dict[str, np.ndarray]:
     """
-    Create region masks for different facial areas.
-
-    Regions: forehead, cheeks (left/right), nose, chin
-
-    Args:
-        landmarks: (N, 2) array of landmark coordinates
-        img_shape: (height, width) of image
+    Generate facial region masks using MediaPipe Face Mesh landmarks.
 
     Returns:
-        Dict mapping region name to binary mask
+        forehead
+        left_cheek
+        right_cheek
+        cheeks
+        nose
+        chin
     """
+
     h, w = img_shape[:2]
     masks = {}
 
-    # MediaPipe face mesh landmark indices for regions
-    # These are approximate and can be tuned
+    if landmarks is None or len(landmarks) < 468:
+        raise ValueError("Invalid or incomplete face landmarks.")
 
-    # Forehead (approximate using face oval top)
-    forehead_indices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
-                        397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
-                        172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+    landmarks = np.asarray(landmarks, dtype=np.int32)
 
-    # Left cheek
-    left_cheek_indices = [234, 93, 132, 58, 172, 136, 150, 176, 148, 152,
-                          377, 400, 378, 379, 365, 397, 288, 361, 323, 454,
-                          356, 389, 251, 284, 332, 297, 338]
+    # Keep landmark coordinates inside image boundaries.
+    points = landmarks.copy()
+    points[:, 0] = np.clip(points[:, 0], 0, w - 1)
+    points[:, 1] = np.clip(points[:, 1], 0, h - 1)
 
-    # Right cheek (mirror of left)
-    right_cheek_indices = [454, 323, 361, 288, 397, 365, 379, 378, 400, 377,
-                           152, 148, 176, 149, 150, 136, 172, 58, 132, 93,
-                           234, 127, 162, 21, 54, 103, 67, 109]
+    def create_mask(indices):
+        mask = np.zeros((h, w), dtype=np.uint8)
 
-    # Nose
-    nose_indices = [168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 164, 0, 11, 12,
-                    13, 14, 15, 16, 17, 18, 200, 199, 175, 152]
+        valid_indices = [i for i in indices if 0 <= i < len(points)]
 
-    # Chin
-    chin_indices = [152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454,
-                    356, 389, 251, 284, 332, 297, 338, 10, 109, 67, 103, 54,
-                    21, 162, 127, 234, 93, 132, 58, 172, 136, 150, 176]
-
-    # Helper function to create mask from indices
-    def create_mask_from_indices(indices, shape):
-        mask = np.zeros(shape, dtype=np.uint8)
-        if len(indices) == 0:
-            return mask
-
-        # Get valid landmarks
-        valid_indices = [i for i in indices if i < len(landmarks)]
         if len(valid_indices) < 3:
             return mask
 
-        points = landmarks[valid_indices]
+        region_points = points[valid_indices]
 
-        # Create convex hull
-        hull = cv2.convexHull(points)
+        hull = cv2.convexHull(region_points)
+
         cv2.fillConvexPoly(mask, hull, 255)
 
         return mask
 
-    # Create all region masks
-    masks["forehead"] = create_mask_from_indices(forehead_indices[:20], (h, w))  # Use subset
-    masks["nose"] = create_mask_from_indices(nose_indices, (h, w))
-    masks["chin"] = create_mask_from_indices([152, 175, 200, 201, 18, 421, 406, 335, 273], (h, w))
+    # Forehead approximation.
+    forehead_indices = [
+        10,
+        109,
+        67,
+        103,
+        54,
+        21,
+        162,
+        127,
+        234,
+        93,
+        132,
+        58,
+        172,
+        136,
+        150,
+        149,
+        176,
+        148,
+        152,
+        377,
+        400,
+        378,
+        379,
+        365,
+        397,
+        288,
+        361,
+        323,
+        454,
+        356,
+        389,
+        251,
+        284,
+        332,
+        297,
+        338,
+    ]
 
-    # For cheeks, use simple approach with full face landmarks
-    # Left cheek: left side of face
-    left_side = landmarks[landmarks[:, 0] < w // 2]
-    if len(left_side) > 3:
-        hull = cv2.convexHull(left_side)
-        masks["left_cheek"] = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillConvexPoly(masks["left_cheek"], hull, 255)
+    # Image-left cheek landmarks.
+    left_cheek_indices = [
+        116,
+        117,
+        118,
+        119,
+        100,
+        126,
+        142,
+        36,
+        205,
+        206,
+        207,
+        213,
+        192,
+        147,
+        123,
+    ]
 
-    # Right cheek: right side of face
-    right_side = landmarks[landmarks[:, 0] >= w // 2]
-    if len(right_side) > 3:
-        hull = cv2.convexHull(right_side)
-        masks["right_cheek"] = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillConvexPoly(masks["right_cheek"], hull, 255)
+    # Image-right cheek landmarks.
+    right_cheek_indices = [
+        345,
+        346,
+        347,
+        348,
+        329,
+        355,
+        371,
+        266,
+        425,
+        426,
+        427,
+        436,
+        416,
+        376,
+        352,
+    ]
 
-    # Combine cheeks into one "cheeks" region
-    if "left_cheek" in masks and "right_cheek" in masks:
-        masks["cheeks"] = cv2.bitwise_or(masks["left_cheek"], masks["right_cheek"])
-        del masks["left_cheek"]
-        del masks["right_cheek"]
+    # Nose.
+    nose_indices = [
+        168,
+        6,
+        197,
+        195,
+        5,
+        4,
+        1,
+        19,
+        94,
+        2,
+        164,
+        0,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        200,
+        199,
+        175,
+    ]
+
+    # Chin.
+    chin_indices = [
+        152,
+        377,
+        400,
+        378,
+        379,
+        365,
+        397,
+        288,
+        361,
+        323,
+        454,
+        356,
+        389,
+        251,
+        284,
+        332,
+        297,
+        338,
+        10,
+        109,
+        67,
+        103,
+        54,
+        21,
+        162,
+        127,
+        234,
+        93,
+        132,
+        58,
+        172,
+        136,
+        150,
+        176,
+    ]
+
+    # Generate individual regions.
+    masks["forehead"] = create_mask(forehead_indices)
+    masks["left_cheek"] = create_mask(left_cheek_indices)
+    masks["right_cheek"] = create_mask(right_cheek_indices)
+    masks["nose"] = create_mask(nose_indices)
+    masks["chin"] = create_mask(chin_indices)
+
+    # Combine cheeks without deleting the individual masks.
+    masks["cheeks"] = cv2.bitwise_or(
+        masks["left_cheek"],
+        masks["right_cheek"],
+    )
+
+    # Validate cheek regions.
+    if not np.any(masks["left_cheek"]):
+        raise ValueError("Left cheek mask is empty.")
+
+    if not np.any(masks["right_cheek"]):
+        raise ValueError("Right cheek mask is empty.")
 
     return masks
